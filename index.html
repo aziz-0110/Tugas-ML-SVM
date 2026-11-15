@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>MNIST SVM ONNX - Mobile Inference</title>
+    <!-- ONNX Runtime Web untuk inferensi lokal di browser HP -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #f4f6f9;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --secondary: #e2e8f0;
+            --secondary-hover: #cbd5e1;
+            --border-color: #cbd5e1;
+            --result-bg: #f8fafc;
+            --status-ok-bg: #dcfce7;
+            --status-ok-text: #166534;
+            --status-err-bg: #fee2e2;
+            --status-err-text: #991b1b;
+            --status-wait-bg: #fef9c3;
+            --status-wait-text: #854d0e;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        .container {
+            background: var(--card-bg);
+            width: 100%;
+            max-width: 400px;
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.06);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .header {
+            text-align: center;
+            width: 100%;
+        }
+
+        .header h1 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .header p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+        }
+
+        /* Indikator Status Model ONNX */
+        .model-status {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 999px;
+            background-color: var(--status-wait-bg);
+            color: var(--status-wait-text);
+        }
+
+        .model-status.ready {
+            background-color: var(--status-ok-bg);
+            color: var(--status-ok-text);
+        }
+
+        .model-status.error {
+            background-color: var(--status-err-bg);
+            color: var(--status-err-text);
+        }
+
+        .canvas-wrapper {
+            width: 100%;
+            max-width: 280px;
+            aspect-ratio: 1 / 1;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid var(--border-color);
+            box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.25);
+            background-color: #000000;
+        }
+
+        canvas#drawCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+            touch-action: none;
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr 1.5fr;
+            gap: 12px;
+            width: 100%;
+            max-width: 280px;
+        }
+
+        button {
+            padding: 12px 16px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 0.15s ease, transform 0.1s ease;
+        }
+
+        button:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        .btn-clear {
+            background-color: var(--secondary);
+            color: var(--text-main);
+        }
+
+        .btn-clear:hover {
+            background-color: var(--secondary-hover);
+        }
+
+        .btn-predict {
+            background-color: var(--primary);
+            color: #ffffff;
+        }
+
+        .btn-predict:hover:not(:disabled) {
+            background-color: var(--primary-hover);
+        }
+
+        .btn-predict:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        /* Area Tampilan Hasil Prediksi + Pratinjau Input 28x28 */
+        .result-box {
+            width: 100%;
+            max-width: 280px;
+            background-color: var(--result-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 10px;
+        }
+
+        .result-main {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            gap: 12px;
+        }
+
+        .result-text {
+            flex: 1;
+            text-align: left;
+        }
+
+        .result-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .result-value {
+            font-size: 2.4rem;
+            font-weight: 800;
+            color: var(--primary);
+            line-height: 1;
+        }
+
+        .preview-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        canvas#previewCanvas {
+            width: 56px;
+            height: 56px;
+            background-color: #000000;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            image-rendering: pixelated;
+        }
+
+        .preview-label {
+            font-size: 0.68rem;
+            color: var(--text-muted);
+        }
+
+        .result-confidence {
+            width: 100%;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+            padding-top: 8px;
+            line-height: 1.4;
+        }
+
+        @media (min-width: 768px) {
+            .container {
+                padding: 32px;
+            }
+
+            .header h1 {
+                font-size: 1.45rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h1>MNIST SVM (ONNX)</h1>
+            <p>Gambar angka 0–9 pada kotak hitam di bawah</p>
+            <span class="model-status" id="modelStatus">Memuat model ONNX...</span>
+        </div>
+
+        <!-- Canvas Utama -->
+        <div class="canvas-wrapper">
+            <canvas id="drawCanvas" width="280" height="280"></canvas>
+        </div>
+
+        <!-- Tombol Aksi di Bawah Canvas -->
+        <div class="button-group">
+            <button type="button" class="btn-clear" id="clearBtn">Hapus</button>
+            <button type="button" class="btn-predict" id="predictBtn" disabled>Prediksi</button>
+        </div>
+
+        <!-- Tempat Menampilkan Hasil Prediksi -->
+        <div class="result-box" id="resultBox">
+            <div class="result-main">
+                <div class="result-text">
+                    <div class="result-label">Hasil Prediksi</div>
+                    <div class="result-value" id="predictionDigit">-</div>
+                </div>
+                <div class="preview-wrapper">
+                    <canvas id="previewCanvas" width="28" height="28"></canvas>
+                    <span class="preview-label">Input 28×28</span>
+                </div>
+            </div>
+            <div class="result-confidence" id="predictionConfidence">
+                Menunggu model siap...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Sesuaikan nama file model ONNX Anda di sini
+        const MODEL_PATH = "./model_svm_quant.onnx";
+
+        const canvas = document.getElementById("drawCanvas");
+        const ctx = canvas.getContext("2d", {willReadFrequently: true});
+        const previewCanvas = document.getElementById("previewCanvas");
+        const previewCtx = previewCanvas.getContext("2d");
+
+        const modelStatus = document.getElementById("modelStatus");
+        const clearBtn = document.getElementById("clearBtn");
+        const predictBtn = document.getElementById("predictBtn");
+        const predictionDigit = document.getElementById("predictionDigit");
+        const predictionConfidence = document.getElementById("predictionConfidence");
+
+        let ortSession = null;
+        let isDrawing = false;
+        let hasStroke = false;
+
+        // Wajib single-thread agar tidak diblokir kebijakan keamanan browser HP (COOP/COEP)
+        ort.env.wasm.numThreads = 1;
+
+        // 1. Inisialisasi Sesi ONNX Runtime Web
+        async function initONNXModel() {
+            try {
+                ortSession = await ort.InferenceSession.create(MODEL_PATH, {
+                    executionProviders: ["wasm"]
+                });
+
+                modelStatus.textContent = "Model ONNX Siap (Lokal)";
+                modelStatus.classList.add("ready");
+                predictBtn.disabled = false;
+                predictionConfidence.textContent = "Silakan tulis angka lalu tekan Prediksi";
+            } catch (err) {
+                console.error("Gagal memuat model ONNX:", err);
+                modelStatus.textContent = "Gagal Memuat Model";
+                modelStatus.classList.add("error");
+                predictionConfidence.textContent =
+                    "Pastikan file model_svm_quant.onnx ada di folder yang sama & diakses lewat HTTP/HTTPS.";
+            }
+        }
+
+        // 2. Inisialisasi Kanvas Gambar
+        function initCanvas() {
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = "#FFFFFF";
+            ctx.lineWidth = 20;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+
+            previewCtx.fillStyle = "#000000";
+            previewCtx.fillRect(0, 0, 28, 28);
+
+            hasStroke = false;
+        }
+
+        initCanvas();
+        window.addEventListener("DOMContentLoaded", initONNXModel);
+
+        function getPointerPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            return {
+                x: (e.clientX - rect.left) * scaleX,
+                y: (e.clientY - rect.top) * scaleY
+            };
+        }
+
+        canvas.addEventListener("pointerdown", (e) => {
+            isDrawing = true;
+            hasStroke = true;
+            canvas.setPointerCapture(e.pointerId);
+            const pos = getPointerPos(e);
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+        });
+
+        canvas.addEventListener("pointermove", (e) => {
+            if (!isDrawing) return;
+            const pos = getPointerPos(e);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+        });
+
+        function stopDrawing(e) {
+            if (!isDrawing) return;
+            isDrawing = false;
+            ctx.closePath();
+            if (e.pointerId !== undefined) {
+                canvas.releasePointerCapture(e.pointerId);
+            }
+        }
+
+        canvas.addEventListener("pointerup", stopDrawing);
+        canvas.addEventListener("pointercancel", stopDrawing);
+
+        clearBtn.addEventListener("click", () => {
+            initCanvas();
+            predictionDigit.textContent = "-";
+            predictionConfidence.textContent = ortSession
+                ? "Silakan tulis angka lalu tekan Prediksi"
+                : "Model belum termuat.";
+        });
+
+        // 3. Preprocessing: Crop & Centering (Bounding Box) ke 28x28 -> Float32Array(784)
+        function getMNIST28x28Data() {
+            const width = canvas.width;
+            const height = canvas.height;
+            const srcData = ctx.getImageData(0, 0, width, height).data;
+
+            let minX = width;
+            let minY = height;
+            let maxX = -1;
+            let maxY = -1;
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const idx = (y * width + x) * 4;
+                    if (srcData[idx] > 10) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+            }
+
+            if (maxX === -1 || maxY === -1) {
+                return null;
+            }
+
+            const cropWidth = maxX - minX + 1;
+            const cropHeight = maxY - minY + 1;
+
+            const targetBoxSize = 20;
+            const scale = targetBoxSize / Math.max(cropWidth, cropHeight);
+            const scaledWidth = Math.max(1, Math.round(cropWidth * scale));
+            const scaledHeight = Math.max(1, Math.round(cropHeight * scale));
+
+            const frameSize = 28;
+            const offsetX = Math.floor((frameSize - scaledWidth) / 2);
+            const offsetY = Math.floor((frameSize - scaledHeight) / 2);
+
+            const tempCanvas = document.createElement("canvas");
+            tempCanvas.width = frameSize;
+            tempCanvas.height = frameSize;
+            const tempCtx = tempCanvas.getContext("2d");
+
+            tempCtx.fillStyle = "#000000";
+            tempCtx.fillRect(0, 0, frameSize, frameSize);
+            tempCtx.imageSmoothingEnabled = true;
+            tempCtx.imageSmoothingQuality = "high";
+
+            tempCtx.drawImage(
+                canvas,
+                minX, minY, cropWidth, cropHeight,
+                offsetX, offsetY, scaledWidth, scaledHeight
+            );
+
+            // Tampilkan pratinjau 28x28 di UI
+            previewCtx.clearRect(0, 0, frameSize, frameSize);
+            previewCtx.drawImage(tempCanvas, 0, 0);
+
+            const finalImgData = tempCtx.getImageData(0, 0, frameSize, frameSize).data;
+            const normalizedPixels = new Float32Array(frameSize * frameSize);
+
+            for (let i = 0; i < frameSize * frameSize; i++) {
+                // Normalisasi 0.0 - 1.0 (sesuaikan jika saat training memakai skala 0 - 255)
+                normalizedPixels[i] = finalImgData[i * 4] / 255.0;
+            }
+
+            return normalizedPixels;
+        }
+
+        // 4. Jalankan Inferensi SVM ONNX di Perangkat
+        async function runPrediction() {
+            if (!ortSession) {
+                predictionConfidence.textContent = "Model ONNX belum siap.";
+                return;
+            }
+
+            const mnistInput = getMNIST28x28Data();
+            if (!hasStroke || !mnistInput) {
+                predictionConfidence.textContent = "Canvas masih kosong. Tulis angka terlebih dahulu.";
+                return;
+            }
+
+            predictBtn.disabled = true;
+            predictionConfidence.textContent = "Menghitung prediksi...";
+
+            try {
+                const startTime = performance.now();
+
+                // Bentuk tensor input SVM: [batch_size=1, features=784]
+                const inputName = ortSession.inputNames[0];
+                const inputTensor = new ort.Tensor("float32", mnistInput, [1, 784]);
+                const feeds = {[inputName]: inputTensor};
+
+                const results = await ortSession.run(feeds);
+                const elapsedMs = (performance.now() - startTime).toFixed(1);
+
+                // Output 0: Label kelas prediksi (konversi BigInt jika int64)
+                const labelOutputName = ortSession.outputNames[0];
+                const rawLabel = results[labelOutputName].data[0];
+                const predictedClass = typeof rawLabel === "bigint" ? Number(rawLabel) : rawLabel;
+
+                // Output 1: Probabilitas (jika model di-export dengan probability=True & zipmap=False)
+                let detailText = `Waktu inferensi: ${elapsedMs} ms`;
+                if (ortSession.outputNames.length > 1) {
+                    const probOutputName = ortSession.outputNames[1];
+                    const probOutput = results[probOutputName];
+
+                    if (probOutput && probOutput.data) {
+                        const scores = Array.from(probOutput.data);
+                        const isValidProbability = scores.every((v) => v >= 0 && v <= 1.0001);
+
+                        if (isValidProbability && scores.length === 10) {
+                            const maxProb = Math.max(...scores);
+                            detailText = `Keyakinan: ${(maxProb * 100).toFixed(1)}% • ${elapsedMs} ms`;
+                        }
+                    }
+                }
+
+                predictionDigit.textContent = predictedClass;
+                predictionConfidence.textContent = detailText;
+            } catch (error) {
+                console.error("Error saat inferensi:", error);
+                predictionDigit.textContent = "!";
+                predictionConfidence.textContent = `Gagal inferensi: ${error.message}`;
+            } finally {
+                predictBtn.disabled = false;
+            }
+        }
+
+        predictBtn.addEventListener("click", runPrediction);
+    </script>
+</body>
+
+</html>
