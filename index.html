@@ -159,7 +159,7 @@
             cursor: not-allowed;
         }
 
-        /* Area Tampilan Hasil Prediksi + Pratinjau Input 28x28 */
+        /* Area Tampilan Hasil Prediksi + Pratinjau Input 28x28 + Bar Probabilitas */
         .result-box {
             width: 100%;
             max-width: 280px;
@@ -226,10 +226,69 @@
         .result-confidence {
             width: 100%;
             font-size: 0.82rem;
+            font-weight: 600;
             color: var(--text-muted);
             border-top: 1px solid var(--border-color);
             padding-top: 8px;
             line-height: 1.4;
+        }
+
+        /* Distribusi Bar Probabilitas Kelas 0 - 9 */
+        .prob-list {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            border-top: 1px solid var(--border-color);
+            padding-top: 10px;
+        }
+
+        .prob-row {
+            display: grid;
+            grid-template-columns: 16px 1fr 46px;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.75rem;
+        }
+
+        .prob-digit {
+            font-weight: 700;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        .prob-bar-bg {
+            width: 100%;
+            height: 8px;
+            background-color: var(--secondary);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .prob-bar-fill {
+            height: 100%;
+            width: 0%;
+            background-color: #94a3b8;
+            border-radius: 999px;
+            transition: width 0.25s ease, background-color 0.2s ease;
+        }
+
+        .prob-pct {
+            font-variant-numeric: tabular-nums;
+            color: var(--text-muted);
+            text-align: right;
+            font-size: 0.72rem;
+        }
+
+        /* Sorotan untuk kelas dengan prediksi tertinggi */
+        .prob-row.active .prob-digit,
+        .prob-row.active .prob-pct {
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        .prob-row.active .prob-bar-fill {
+            background-color: var(--primary);
         }
 
         @media (min-width: 768px) {
@@ -276,14 +335,17 @@
                     <span class="preview-label">Input 28×28</span>
                 </div>
             </div>
+
             <div class="result-confidence" id="predictionConfidence">
                 Menunggu model siap...
             </div>
+
+            <!-- Bar Probabilitas Kelas 0-9 -->
+            <div class="prob-list" id="probList"></div>
         </div>
     </div>
 
     <script>
-        // Sesuaikan nama file model ONNX Anda di sini
         const MODEL_PATH = "./model_svm_quant.onnx";
 
         const canvas = document.getElementById("drawCanvas");
@@ -296,13 +358,57 @@
         const predictBtn = document.getElementById("predictBtn");
         const predictionDigit = document.getElementById("predictionDigit");
         const predictionConfidence = document.getElementById("predictionConfidence");
+        const probList = document.getElementById("probList");
 
         let ortSession = null;
         let isDrawing = false;
         let hasStroke = false;
 
-        // Wajib single-thread agar tidak diblokir kebijakan keamanan browser HP (COOP/COEP)
         ort.env.wasm.numThreads = 1;
+
+        // 0. Bangun elemen baris probabilitas 0 sampai 9
+        function buildProbBars() {
+            probList.innerHTML = "";
+            for (let d = 0; d < 10; d++) {
+                const row = document.createElement("div");
+                row.className = "prob-row";
+                row.id = `prob-row-${d}`;
+                row.innerHTML = `
+          <span class="prob-digit">${d}</span>
+          <div class="prob-bar-bg">
+            <div class="prob-bar-fill" id="prob-fill-${d}"></div>
+          </div>
+          <span class="prob-pct" id="prob-pct-${d}">0.0%</span>
+        `;
+                probList.appendChild(row);
+            }
+        }
+
+        function updateProbBars(probabilities, activeDigit) {
+            for (let d = 0; d < 10; d++) {
+                const row = document.getElementById(`prob-row-${d}`);
+                const fill = document.getElementById(`prob-fill-${d}`);
+                const pct = document.getElementById(`prob-pct-${d}`);
+
+                const val = probabilities && probabilities[d] !== undefined ? probabilities[d] : 0;
+                const percentage = Math.max(0, Math.min(100, val * 100));
+
+                fill.style.width = `${percentage.toFixed(1)}%`;
+                pct.textContent = `${percentage.toFixed(1)}%`;
+
+                if (d === activeDigit) {
+                    row.classList.add("active");
+                } else {
+                    row.classList.remove("active");
+                }
+            }
+        }
+
+        function resetProbBars() {
+            updateProbBars(new Array(10).fill(0), -1);
+        }
+
+        buildProbBars();
 
         // 1. Inisialisasi Sesi ONNX Runtime Web
         async function initONNXModel() {
@@ -382,6 +488,7 @@
 
         clearBtn.addEventListener("click", () => {
             initCanvas();
+            resetProbBars();
             predictionDigit.textContent = "-";
             predictionConfidence.textContent = ortSession
                 ? "Silakan tulis angka lalu tekan Prediksi"
@@ -443,7 +550,6 @@
                 offsetX, offsetY, scaledWidth, scaledHeight
             );
 
-            // Tampilkan pratinjau 28x28 di UI
             previewCtx.clearRect(0, 0, frameSize, frameSize);
             previewCtx.drawImage(tempCanvas, 0, 0);
 
@@ -451,11 +557,17 @@
             const normalizedPixels = new Float32Array(frameSize * frameSize);
 
             for (let i = 0; i < frameSize * frameSize; i++) {
-                // Normalisasi 0.0 - 1.0 (sesuaikan jika saat training memakai skala 0 - 255)
                 normalizedPixels[i] = finalImgData[i * 4] / 255.0;
             }
 
             return normalizedPixels;
+        }
+
+        function softmax(arr) {
+            const maxVal = Math.max(...arr);
+            const exps = arr.map((v) => Math.exp(v - maxVal));
+            const sumExps = exps.reduce((a, b) => a + b, 0);
+            return exps.map((e) => e / sumExps);
         }
 
         // 4. Jalankan Inferensi SVM ONNX di Perangkat
@@ -475,44 +587,65 @@
             predictionConfidence.textContent = "Menghitung prediksi...";
 
             try {
-                const startTime = performance.now();
-
-                // Bentuk tensor input SVM: [batch_size=1, features=784]
                 const inputName = ortSession.inputNames[0];
                 const inputTensor = new ort.Tensor("float32", mnistInput, [1, 784]);
                 const feeds = {[inputName]: inputTensor};
 
                 const results = await ortSession.run(feeds);
-                const elapsedMs = (performance.now() - startTime).toFixed(1);
 
-                // Output 0: Label kelas prediksi (konversi BigInt jika int64)
+                // Output 0: Label kelas prediksi
                 const labelOutputName = ortSession.outputNames[0];
                 const rawLabel = results[labelOutputName].data[0];
-                const predictedClass = typeof rawLabel === "bigint" ? Number(rawLabel) : rawLabel;
+                const predictedClass = typeof rawLabel === "bigint" ? Number(rawLabel) : Number(rawLabel);
 
-                // Output 1: Probabilitas (jika model di-export dengan probability=True & zipmap=False)
-                let detailText = `Waktu inferensi: ${elapsedMs} ms`;
+                // Output 1: Hitung distribusi probabilitas 10 kelas & nilai confidence
+                let detailText = "Nilai Confidence: -";
+                let classProbabilities = new Array(10).fill(0);
+
                 if (ortSession.outputNames.length > 1) {
                     const probOutputName = ortSession.outputNames[1];
                     const probOutput = results[probOutputName];
 
                     if (probOutput && probOutput.data) {
                         const scores = Array.from(probOutput.data);
-                        const isValidProbability = scores.every((v) => v >= 0 && v <= 1.0001);
+                        const sumScores = scores.reduce((a, b) => a + b, 0);
+                        const isValidProbability =
+                            scores.length === 10 &&
+                            scores.every((v) => v >= 0 && v <= 1.0001) &&
+                            Math.abs(sumScores - 1.0) < 0.05;
 
-                        if (isValidProbability && scores.length === 10) {
-                            const maxProb = Math.max(...scores);
-                            detailText = `Keyakinan: ${(maxProb * 100).toFixed(1)}% • ${elapsedMs} ms`;
+                        if (isValidProbability) {
+                            classProbabilities = scores;
+                        } else if (scores.length === 10) {
+                            classProbabilities = softmax(scores);
+                        } else if (scores.length === 45) {
+                            const classScores = new Array(10).fill(0);
+                            let pairIdx = 0;
+                            for (let i = 0; i < 10; i++) {
+                                for (let j = i + 1; j < 10; j++) {
+                                    const val = scores[pairIdx++];
+                                    classScores[i] += val;
+                                    classScores[j] -= val;
+                                }
+                            }
+                            classProbabilities = softmax(classScores);
+                        }
+
+                        const maxProb = Math.max(...classProbabilities);
+                        if (maxProb > 0) {
+                            detailText = `Nilai Confidence: ${(maxProb * 100).toFixed(2)}%`;
                         }
                     }
                 }
 
                 predictionDigit.textContent = predictedClass;
                 predictionConfidence.textContent = detailText;
+                updateProbBars(classProbabilities, predictedClass);
             } catch (error) {
                 console.error("Error saat inferensi:", error);
                 predictionDigit.textContent = "!";
                 predictionConfidence.textContent = `Gagal inferensi: ${error.message}`;
+                resetProbBars();
             } finally {
                 predictBtn.disabled = false;
             }
